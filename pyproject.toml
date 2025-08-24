@@ -1,0 +1,30 @@
+[project]
+name = "hello_hear_HA"
+version = "0.1.0"
+description = "Fitbit Conversational AI POC"
+authors = [
+    { name = "Matthias Elbaz", email = "matthias.elbaz91@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.6.0,<0.7.0",
+    "langchain-anthropic>=0.2.1",
+    "langchain>=0.3.8",
+    "langchain-core>=0.3.8",
+    "python-dotenv>=1.0.1",
+    "langgraph-sdk>=0.1.32",
+    "python-dotenv>=1.0.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",
+    "fastapi[standard,testing]>=0.116.1",
+    "pydantic>=2.11.7",
+    "ipykernel",
+    "ipython"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+
+
