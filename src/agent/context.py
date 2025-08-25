@@ -28,6 +28,8 @@ class Context:
 
     system_prompt: str = prompts.SYSTEM_PROMPT
 
+    memory_evaluation_prompt: str = prompts.MEMORY_EVALUATION_PROMPT
+
     def __post_init__(self):
         """Fetch env vars for attributes that were not passed as args."""
         for f in fields(self):
