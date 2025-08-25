@@ -9,10 +9,10 @@ from langgraph.graph import END, StateGraph
 from langgraph.runtime import Runtime
 from langgraph.config import get_store
 
-from agent import tools, utils
-from agent.context import Context
-from agent.state import State
-from agent.schemas import MemoryEvaluationSchema
+from . import tools, utils
+from .context import Context
+from .state import State
+from .schemas import MemoryEvaluationSchema
 
 logger = logging.getLogger(__name__)
 
