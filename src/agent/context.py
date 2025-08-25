@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, fields
 
 from typing_extensions import Annotated
 
-from agent import prompts
+from . import prompts
 
 
 @dataclass(kw_only=True)
