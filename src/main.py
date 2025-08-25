@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
                     "thread_id": "startup",
                     "checkpoint_id": "startup_test"
                 },
-                "recursion_limit": 5  # Increased from 1 to allow proper execution
+                "recursion_limit": 10  # Sufficient for simplified graph
             }
         )
         
@@ -117,8 +117,7 @@ async def root():
             "docs": "/docs",
             "health": "/health",
             "initialize_user": "/initialize-user",
-            "chat": "/chat",
-            "chat_stream": "/chat/stream"
+            "chat": "/chat"
         },
         "status": "healthy"
     }
@@ -274,17 +273,17 @@ async def chat(request: ChatRequest):
             messages=[HumanMessage(content=request.message)]
         )
         
-        # Run the graph directly with proper LangGraph invocation
+        # Run the simplified graph with proper LangGraph invocation
         result = await graph_with_checkpointer.ainvoke(
             state, 
             context=context,
             config={
                 "configurable": {"thread_id": thread_id},
-                "recursion_limit": 10  # Prevent infinite loops
+                "recursion_limit": 10  # Sufficient for simplified graph
             }
         )
         
-        # Extract response
+        # Extract response from the last message
         last_message = result["messages"][-1]
         response_content = last_message.content if hasattr(last_message, 'content') else str(last_message)
         
@@ -300,47 +299,10 @@ async def chat(request: ChatRequest):
             detail="Conversation too complex. Please try a simpler request."
         )
     except Exception as e:
+        # More detailed error logging for debugging
+        print(f"Chat error for user {request.user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
-
-@app.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
-    """Streaming chat endpoint for real-time responses."""
-    try:
-        # Generate thread_id if not provided
-        thread_id = request.thread_id or str(uuid.uuid4())
-        
-        # Create context with both user_id and thread_id
-        context = Context(
-            user_id=request.user_id,
-            thread_id=thread_id
-        )
-        
-        # Create initial state
-        state = State(
-            messages=[HumanMessage(content=request.message)]
-        )
-        
-        # Stream the graph execution
-        async for chunk in graph_with_checkpointer.astream(
-            state,
-            context=context,
-            config={
-                "configurable": {"thread_id": thread_id},
-                "recursion_limit": 10
-            },
-            stream_mode="values"
-        ):
-            yield {
-                "data": chunk,
-                "thread_id": thread_id,
-                "user_id": request.user_id
-            }
-            
-    except GraphRecursionError:
-        yield {"error": "Conversation too complex. Please try a simpler request."}
-    except Exception as e:
-        yield {"error": f"Chat error: {str(e)}"}
 
 
 @app.get("/health")
@@ -353,30 +315,40 @@ async def health_check():
 async def agent_health_check():
     """Check agent graph health."""
     try:
-        # Test graph compilation
-        test_state = State(messages=[HumanMessage(content="test")])
-        test_context = Context(user_id="test", thread_id="test")
+        # Test graph compilation and basic functionality
+        test_state = State(messages=[HumanMessage(content="health check test")])
+        test_context = Context(user_id="health_check", thread_id="health_check")
         
-        # Quick test invocation with minimal recursion
+        # Quick test invocation to verify the simplified graph works
         result = await graph_with_checkpointer.ainvoke(
             test_state, 
             context=test_context,
-            config={"recursion_limit": 1}
+            config={
+                "configurable": {"thread_id": "health_check"},
+                "recursion_limit": 5  # Sufficient for simplified graph
+            }
         )
+        
+        # Verify we got a proper response
+        if not result or "messages" not in result or not result["messages"]:
+            raise Exception("Graph did not return proper message structure")
         
         return {
             "status": "healthy",
             "agent": "Fitbit AI Health Assistant",
             "graph_compiled": True,
+            "graph_structure": "simplified",
             "memory_store": "operational",
-            "checkpointer": "operational"
+            "checkpointer": "operational",
+            "test_messages_count": len(result["messages"])
         }
         
     except Exception as e:
         return {
             "status": "unhealthy",
             "error": str(e),
-            "agent": "Fitbit AI Health Assistant"
+            "agent": "Fitbit AI Health Assistant",
+            "graph_structure": "simplified"
         }
 
 
@@ -409,29 +381,6 @@ async def get_user_memories(user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve memories: {str(e)}")
 
-
-@app.delete("/users/{user_id}")
-async def delete_user(user_id: str):
-    """Delete a user and all their memories."""
-    try:
-        # Use the same store instance that the LangGraph agent uses
-        agent_store = graph_with_checkpointer.store if graph_with_checkpointer else store
-        
-        # Get all memories for the user
-        memories = await agent_store.asearch(
-            ("memories", user_id), # Use same namespace as tools.py
-            query="",
-            limit=1000
-        )
-        
-        # Delete each memory
-        for memory in memories:
-            await agent_store.adelete(("memories", user_id), memory.key)
-        
-        return {"message": f"User {user_id} deleted successfully"}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
 
 
 if __name__ == "__main__":

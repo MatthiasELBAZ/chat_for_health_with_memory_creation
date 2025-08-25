@@ -3,26 +3,22 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import cast
 
 from langchain_core.messages import SystemMessage, ToolMessage
-from langchain.chat_models import init_chat_model
 from langgraph.graph import END, StateGraph
 from langgraph.runtime import Runtime
-from langgraph.store.base import BaseStore
 from langgraph.config import get_store
-import os
 
 from agent import tools, utils
 from agent.context import Context
 from agent.state import State
+from agent.schemas import MemoryEvaluationSchema
 
 logger = logging.getLogger(__name__)
 
-# Remove the global llm initialization - we'll create it dynamically in call_model
 
 async def call_model(state: State, runtime: Runtime[Context]) -> dict:
-    """Extract the user's state from the conversation and update the memory."""
+    """Main chatbot node that handles conversation, memory evaluation, and storage."""
     user_id = runtime.context.user_id
     model = runtime.context.model
     system_prompt = runtime.context.system_prompt
@@ -30,118 +26,145 @@ async def call_model(state: State, runtime: Runtime[Context]) -> dict:
     # Get the store from the runtime context
     store = get_store()
     
-    # Search for relevant memories
-    namespace = (user_id, "memories")
-    memories = await store.asearch(
+    # Search for relevant memories - use the same namespace as storage
+    namespace = ("memories", user_id)
+    
+    # Try both targeted search and general retrieval for better context
+    targeted_memories = await store.asearch(
         namespace,
         query=str(state.messages[-1].content),
+        limit=3
+    )
+    
+    # Also get recent general memories for this user
+    general_memories = await store.asearch(
+        namespace,
+        query="",  # Empty query to get all memories
         limit=5
     )
+    
+    # Combine and deduplicate memories
+    all_memories = {}
+    for mem in targeted_memories + general_memories:
+        all_memories[mem.key] = mem
+    
+    memories = list(all_memories.values())
     
     # Format memories for the prompt
     memory_text = ""
     if memories:
-        memory_text = "\n\nRelevant memories:\n" + "\n".join(
-            f"- {mem.value.get('content', '')}" for mem in memories
-        )
+        memory_list = []
+        for mem in memories:
+            content = mem.value.get('content', '')
+            context = mem.value.get('context', '')
+            if content:
+                if context:
+                    memory_list.append(f"- {content} ({context})")
+                else:
+                    memory_list.append(f"- {content}")
+        
+        if memory_list:
+            memory_text = f"\n\n**IMPORTANT - USER MEMORIES & PREVIOUS CONTEXT:**\nYou have stored the following information about this user. Use this context to provide personalized, continuous responses:\n" + "\n".join(memory_list)
+            memory_text += f"\n\n**CRITICAL:** Based on these memories, DO NOT greet the user as if meeting for the first time. Continue the conversation naturally based on previous interactions and their established goals."
     
-    # Create system prompt with memories
-    sys = system_prompt + memory_text
+    # Create system prompt with memories and fill placeholders
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Fill system prompt placeholders
+    formatted_system_prompt = system_prompt.format(
+        user_info=f"User ID: {user_id}",
+        time=current_time
+    )
+    
+    sys = formatted_system_prompt + memory_text
     
     # Initialize the language model
-    # Parse the model and provider from the context
-    model_info = utils.split_model_and_provider(model)
+    llm = utils.get_llm(model)
     
-    if model_info["provider"]:
-        # Set environment variables for the specific provider
-        if model_info["provider"] == "anthropic":
-            # Ensure ANTHROPIC_API_KEY is set
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ValueError("ANTHROPIC_API_KEY environment variable is required for Anthropic models")
-            os.environ["ANTHROPIC_API_KEY"] = api_key
+    # First, evaluate if we need to store memory
+    llm_for_evaluation = utils.get_llm(model)
+    structured_llm = llm_for_evaluation.with_structured_output(MemoryEvaluationSchema)
+    
+    # Get recent messages for evaluation (filter out tool messages)
+    recent_messages = state.messages[-3:] if len(state.messages) >= 3 else state.messages
+    filtered_for_eval = []
+    for msg in recent_messages:
+        if hasattr(msg, 'content') and not hasattr(msg, 'tool_calls') and not hasattr(msg, 'tool_call_id'):
+            filtered_for_eval.append(msg)
+    
+    # Evaluate if we should store memory
+    evaluation_result = await structured_llm.ainvoke([
+        SystemMessage(content=runtime.context.memory_evaluation_prompt),
+        *filtered_for_eval
+    ])
+    
+    # If we should store memory, do it before generating response
+    if evaluation_result.evaluation in ["STORE", "EXPLICIT"]:
+        # Use the LLM with tools to generate memory and response
+        llm_with_tools = llm.bind_tools([tools.upsert_memory])
         
-        llm = init_chat_model(
-            model=model_info["model"], 
-            model_provider=model_info["provider"]
-        )
-    else:
-        # Fallback for models without explicit provider
-        llm = init_chat_model(model)
-    
-    # Invoke the language model with the prepared prompt and tools
-    # "bind_tools" gives the LLM the JSON schema for all tools in the list so it knows how
-    # to use them.
-    msg = await llm.bind_tools([tools.upsert_memory]).ainvoke(
-        [SystemMessage(content=sys), *state.messages],
-    )
-    return {"messages": [msg]}
-
-
-async def store_memory(state: State, runtime: Runtime[Context]):
-    # Extract tool calls from the last message
-    msg = state.messages[-1]
-    tool_calls = getattr(msg, "tool_calls", []) or []
-    
-    if not tool_calls:
-        # No tool calls to process
-        return {"messages": []}
-
-    # Get the store from the runtime context
-    store = get_store()
-    
-    # Concurrently execute all upsert_memory calls
-    saved_memories = await asyncio.gather(
-        *(
-            tools.upsert_memory(
-                **tc["args"],
-                user_id=runtime.context.user_id,
-                store=store,
+        # Use all conversation messages for context
+        response_msg = await llm_with_tools.ainvoke([
+            SystemMessage(content=sys),
+            *state.messages
+        ])
+        
+        # If the model made tool calls, execute them
+        if hasattr(response_msg, 'tool_calls') and response_msg.tool_calls:
+            tool_calls = response_msg.tool_calls
+            
+            # Execute memory storage
+            saved_memories = await asyncio.gather(
+                *(
+                    tools.upsert_memory(
+                        **tc["args"],
+                        user_id=user_id,
+                        store=store,
+                    )
+                    for tc in tool_calls
+                )
             )
-            for tc in tool_calls
-        )
-    )
+            
+            # Create tool messages for the conversation
+            tool_messages = [
+                ToolMessage(
+                    content=mem,
+                    tool_call_id=tc["id"],
+                )
+                for tc, mem in zip(tool_calls, saved_memories)
+            ]
+            
+            # Generate final response without tools
+            final_response = await llm.ainvoke([
+                SystemMessage(content=sys),
+                *state.messages,
+                response_msg,
+                *tool_messages
+            ])
+            
+            return {"messages": [response_msg, *tool_messages, final_response]}
+        else:
+            # No tool calls made, return the response as is
+            return {"messages": [response_msg]}
+    else:
+        # No memory storage needed, just generate response
+        response_msg = await llm.ainvoke([
+            SystemMessage(content=sys),
+            *state.messages
+        ])
+        
+        return {"messages": [response_msg]}
 
-    # Format the results of memory storage operations
-    # This provides confirmation to the model that the actions it took were completed
-    results = [
-        ToolMessage(
-            content=mem,
-            tool_call_id=tc["id"],
-        )
-        for tc, mem in zip(tool_calls, saved_memories)
-    ]
-    return {"messages": results}
 
-
-def route_message(state: State):
-    """Determine the next step based on the presence of tool calls."""
-    msg = state.messages[-1]
-    if getattr(msg, "tool_calls", None):
-        # If there are tool calls, we need to store memories
-        return "store_memory"
-    # Otherwise, finish; user can send the next message
-    return END
-
-
-# Create the graph + all nodes
+# Simplified graph structure following LangGraph best practices
 builder = StateGraph(State, context_schema=Context)
 
-# Define the flow of the memory extraction process
+# Single node that handles everything
 builder.add_node("call_model", call_model)
-builder.add_node("store_memory", store_memory)
 
-# Clear flow definition
+# Simple flow: START → call_model → END
 builder.add_edge("__start__", "call_model")
-builder.add_conditional_edges(
-    "call_model", 
-    route_message, 
-    {
-        "store_memory": "store_memory",
-        END: END
-    }
-)
-builder.add_edge("store_memory", END)
+builder.add_edge("call_model", END)
 
 # Export both the builder and a basic compiled graph
 graph = builder.compile()
@@ -149,6 +172,5 @@ graph.name = "MemoryAgent"
 
 # Also export the builder for adding checkpointing
 graph_builder = builder
-
 
 __all__ = ["graph", "graph_builder"]
