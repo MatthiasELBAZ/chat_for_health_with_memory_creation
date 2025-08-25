@@ -14,18 +14,44 @@ This project demonstrates how Fitbit can integrate a conversational AI assistant
 - **Natural Language Understanding**: Handle health-related queries like "How did I sleep last night?" or "Am I more active this week?"
 - **Personalized Insights**: Generate meaningful health insights from step count, heart rate, sleep data, and goals
 - **Proactive Suggestions**: Offer helpful follow-ups and nudges based on user patterns
-- **Memory System**: Remember user preferences and conversation history for personalized experiences
+- **Intelligent Memory System**: Automatically evaluates and stores important health information for personalized experiences
+- **Contextual Conversations**: Uses stored memories to maintain conversation continuity and build rapport
 - **Modular Architecture**: Built with LangGraph for scalable, production-ready conversational AI
+- **PostgreSQL Persistence**: Reliable conversation and user data storage with pgvector support
+
+## 🧠 Intelligent Memory System
+
+The AI assistant features an advanced memory system that enhances user experience through personalization:
+
+### Memory Intelligence
+- **Automatic Evaluation**: For each user message, the AI determines if information is worth storing using specialized evaluation prompts
+- **Smart Storage Decisions**: Automatically stores health goals, personal preferences, medical conditions, lifestyle information, and communication preferences
+- **Context Retrieval**: Before responding to any message, the agent searches and uses stored memories to provide personalized, contextual responses
+- **Conversation Continuity**: Maintains rapport across sessions by remembering previous discussions and user preferences
+
+### What Gets Stored
+The AI intelligently stores:
+- **Health & Fitness**: Personal goals, fitness levels, medical conditions, sleep patterns, workout preferences
+- **Personal Context**: Names, age, occupation, lifestyle details, communication style preferences
+- **Coaching Context**: What motivates the user, preferred coaching approaches, feedback on recommendations
+- **Explicit Requests**: Any information the user specifically asks to be remembered
+
+### Memory Usage
+- **Contextual Responses**: Every response is informed by relevant stored memories
+- **Personalized Advice**: Recommendations based on known preferences and past interactions
+- **Goal Tracking**: Continuous reference to user's stated health objectives
+- **Relationship Building**: Avoids repetitive introductions and builds on established rapport
 
 ## 🏗️ Architecture
 
-The system is built using modern AI orchestration frameworks:
+The system is built using modern AI orchestration frameworks with a modular architecture:
 
 - **LangGraph**: Core conversational flow management and state handling
-- **LangChain**: LLM integration and tool management
+- **LangChain**: LLM integration and tool management  
 - **FastAPI**: RESTful API for easy integration and testing
-- **Memory Store**: Persistent conversation and user preference storage
+- **PostgreSQL + pgvector**: Persistent storage for conversations and user preferences
 - **Anthropic Claude**: Advanced language model for natural conversations
+- **Docker Compose**: Containerized database setup for development
 
 ## 🚀 Quick Start
 
@@ -33,6 +59,8 @@ The system is built using modern AI orchestration frameworks:
 
 - Python 3.12+
 - Anthropic API key
+- Docker & Docker Compose (for PostgreSQL storage)
+- uv (recommended) or pip for dependency management
 
 ### Installation
 
@@ -44,91 +72,160 @@ The system is built using modern AI orchestration frameworks:
 
 2. **Install dependencies**
    ```bash
-   pip install -e .
-   # or using uv (recommended)
+   # Using uv (recommended)
    uv sync
+   
+   # Or using pip
+   pip install -e .
    ```
 
 3. **Set up environment variables**
    ```bash
-   export ANTHROPIC_API_KEY="your-anthropic-api-key"
-   # or create a .env file
-   echo "ANTHROPIC_API_KEY=your-anthropic-api-key" > .env
+   # Create .env file with your API key
+   echo "ANTHROPIC_API_KEY=your-key-here" > .env
    ```
 
-4. **Run the application**
+4. **Start PostgreSQL database**
    ```bash
-   # Start the FastAPI server
-   python src/main.py
+   # Start PostgreSQL with pgvector extension
+   docker compose up -d
    
-   # Or run tests
-   pytest
+   # Check container status
+   docker compose ps
    
-   # Or use the Jupyter notebook for interactive testing
-   jupyter notebook test.ipynb
+   # View logs if needed
+   docker compose logs -f
    ```
 
-## 📱 Usage Examples
+5. **Start the application**
+   ```bash
+   # Run the FastAPI application
+   python -m src.app.run
+   
+   # Alternative: Run with uvicorn directly
+   uvicorn src.app.app:app --host 0.0.0.0 --port 8000 --reload
+   ```
 
-### API Endpoints
+## 🐘 PostgreSQL Storage Configuration
 
-- `POST /chat` - Send a message to the AI assistant
-- `GET /health` - Check system health
-- `GET /docs` - Interactive API documentation
+The application uses PostgreSQL with pgvector extension for persistent storage of conversations, user preferences, and checkpoints.
 
-### Sample Conversation
+### Docker Compose Setup
 
-```
-User: "How did I sleep last night?"
-Assistant: "Based on your sleep data, you slept for 7.5 hours with good sleep quality. 
-Your deep sleep was 2.1 hours, which is within the recommended range. 
-Would you like some tips to improve your sleep quality further?"
+The `compose.yaml` file provides a complete PostgreSQL setup:
 
-User: "Am I meeting my weekly step goal?"
-Assistant: "You're currently at 45,000 steps this week, which is 90% of your 50,000 step goal. 
-You're very close! A 30-minute walk this evening would help you reach your target. 
-Would you like me to set a reminder for you?"
-```
+### Environment Variables
 
-## 🧪 Testing
-
-The project includes comprehensive testing:
+Create a `.env` file with the following variables:
 
 ```bash
-# Run all tests
-pytest
+# Required: Anthropic API Key
+ANTHROPIC_API_KEY=your-anthropic-api-key-here
 
-# Run specific test files
-pytest src/test_agent.py
-pytest src/test_runtime_fix.py
+# PostgreSQL Configuration (defaults shown)
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=fitbit_ai
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=password
 
-# Run with coverage
-pytest --cov=src
+# Alternative: Use connection string
+# POSTGRES_CONNECTION_STRING=postgresql://postgres:password@localhost:5432/fitbit_ai
+```
+
+### Database Management
+
+```bash
+# Start database
+docker compose up -d
+
+# Stop database  
+docker compose down
+
+# Reset database (removes all data)
+docker compose down -v
+
+# View database logs
+docker compose logs -f db
+
+# Connect to database
+docker compose exec db psql -U postgres -d fitbit_ai
+```
+
+## 📱 API Usage
+
+### Core Endpoints
+
+- **`POST /chat`** - Send a message to the AI assistant
+- **`POST /initialize-user`** - Initialize a new user with mock health data (optional)
+- **`GET /users/{user_id}/memories`** - View all stored memories for a user
+- **`GET /health`** - Check system health
+- **`GET /health/agent`** - Check AI agent health
+- **`GET /docs`** - Interactive API documentation (available at http://localhost:8000/docs)
+
+### Getting Started with a User
+
+You have two options to start using the AI assistant:
+
+#### Option 1: Start Fresh
+Simply start chatting with the AI without initialization. The agent will:
+- Ask for relevant health information as needed
+- Automatically store important details as you share them
+- Build your profile organically through conversation
+
+```bash
+curl -X POST "http://localhost:8000/chat" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "user_id": "john_doe",
+       "message": "Hi, I want to improve my fitness"
+     }'
+```
+
+#### Option 2: Initialize with Mock Data
+Use the initialize endpoint to pre-populate the user with realistic health data:
+
+```bash
+curl -X POST "http://localhost:8000/initialize-user" \
+     -H "Content-Type: application/json" \
+     -d '{"user_id": "john_doe"}'
+```
+
+This creates mock data including:
+- Daily step counts, heart rate, sleep data
+- Fitness goals and achievements
+- Recent activity patterns
+
+### Viewing Stored Memories
+
+Check what the AI has learned about a user:
+
+```bash
+curl -X GET "http://localhost:8000/users/john_doe/memories"
 ```
 
 ## 🔧 Development
 
-### Project Structure
-
-```
-src/
-├── agent/           # Core AI agent components
-│   ├── context.py   # Context management
-│   ├── graph.py     # LangGraph flow definition
-│   ├── prompts.py   # System prompts and templates
-│   ├── state.py     # Conversation state management
-│   ├── tools.py     # AI tools and functions
-│   └── utils.py     # Utility functions
-├── main.py          # FastAPI application entry point
-└── test_*.py        # Test files
-```
-
 ### Key Components
 
+#### Agent Layer (`src/agent/`)
 - **State Management**: Handles conversation flow and user context
+- **LangGraph Integration**: Orchestrates conversational AI workflow  
 - **Memory System**: Stores and retrieves relevant user information
 - **Tool Integration**: Provides health data analysis capabilities
 - **Prompt Engineering**: Optimized prompts for health-focused conversations
+
+#### Application Layer (`src/app/`)
+- **FastAPI Setup**: Web framework with async support
+- **API Routes**: RESTful endpoints for chat and user management
+- **Lifecycle Management**: Database connection and startup/shutdown
+- **Request/Response Models**: Type-safe API contracts
+
+#### Storage Layer (`src/storage/`)
+- **PostgreSQL Integration**: Production-ready persistence with pgvector
+- **LangGraph Checkpoints**: Conversation state persistence
+- **Memory Fallback**: In-memory storage for development
+- **Connection Management**: Async database connection handling
 
 ## 📊 Performance Requirements
 
@@ -136,22 +233,11 @@ src/
 - **Concurrency**: Support for 100+ concurrent users
 - **Uptime**: Target ≥99% availability
 - **Error Handling**: Graceful fallbacks for all error scenarios
-
-## 🔮 Future Enhancements
-
-- **Real-time Data Integration**: Live Fitbit API integration
-- **Multi-modal Inputs**: Voice and text support
-- **Clinical Validation**: Healthcare professional oversight
-- **Advanced Personalization**: Machine learning-based user modeling
-- **Proactive Notifications**: Smart health reminders and alerts
+- **Database**: PostgreSQL with connection pooling and health checks
 
 ## 🤝 Contributing
 
 This is a proof-of-concept project demonstrating conversational AI capabilities for health applications. The modular architecture makes it easy to extend and improve.
-
-## 📄 License
-
-This project is created as part of a technical assessment for Fitbit's conversational AI initiative.
 
 ## 👨‍💻 Author
 
@@ -160,4 +246,4 @@ Email: matthias.elbaz91@gmail.com
 
 ---
 
-*Built with ❤️ using LangGraph, LangChain, and modern AI orchestration techniques.*
+*Built with ❤️ using LangGraph, LangChain, PostgreSQL, and modern AI orchestration techniques.*

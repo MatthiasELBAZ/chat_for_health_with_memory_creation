@@ -1,50 +1,94 @@
-# """PostgreSQL storage implementation for LangGraph agent (production ready)."""
+"""PostgreSQL storage implementation for LangGraph agent with async support."""
 
-# import os
-# from typing import Tuple, Optional
-# from langgraph.checkpoint.postgres import PostgresSaver
-# from langgraph.store.postgres import PostgresStore
+import os
+from typing import Tuple, Optional, AsyncContextManager
+from contextlib import asynccontextmanager
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.store.postgres import AsyncPostgresStore
+from langgraph.store.base import BaseStore
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 
-# def create_postgres_storage(
-#     connection_string: Optional[str] = None,
-#     setup_db: bool = True
-# ) -> Tuple[PostgresSaver, PostgresStore]:
-#     """Create PostgreSQL checkpointer and store for production.
+@asynccontextmanager
+async def create_postgres_storage(
+    setup_db: bool = True
+) -> AsyncContextManager[Tuple[BaseCheckpointSaver, BaseStore]]:
+    """Create async PostgreSQL checkpointer and store with proper lifecycle management.
     
-#     Args:
-#         connection_string: PostgreSQL connection string. If None, reads from env.
-#         setup_db: Whether to create tables if they don't exist
+    This function creates both an AsyncPostgresSaver for conversation persistence
+    and an AsyncPostgresStore for long-term memory storage.
+    
+    Reads connection string from DATABASE_URL environment variable.
+    
+    Args:
+        setup_db: Whether to create tables if they don't exist
         
-#     Returns:
-#         Tuple of (checkpointer, store)
-#     """
-#     # Get connection string from environment if not provided
-#     if connection_string is None:
-#         connection_string = os.getenv("POSTGRES_CONNECTION_STRING")
-#         if not connection_string:
-#             raise ValueError(
-#                 "PostgreSQL connection string not provided. "
-#                 "Set POSTGRES_CONNECTION_STRING environment variable or pass connection_string parameter."
-#             )
+    Yields:
+        Tuple of (async_checkpointer, async_store)
+        
+    Raises:
+        ValueError: If DATABASE_URL is not set
+        ImportError: If required PostgreSQL dependencies are not installed
+    """
+    # Get connection string from environment
+    connection_string = os.getenv("DATABASE_URL")
+    if not connection_string:
+        raise ValueError(
+            "DATABASE_URL environment variable is not set. "
+            "Please set it in your .env file: DATABASE_URL=postgresql://user:password@host:port/database"
+        )
     
-#     # PostgreSQL checkpointer for conversation persistence
-#     checkpointer = PostgresSaver.from_conn_string(connection_string)
-    
-#     # PostgreSQL store for cross-thread memory
-#     store = PostgresStore.from_conn_string(connection_string)
-    
-#     # Setup database tables if requested
-#     if setup_db:
-#         checkpointer.setup()
-#         store.setup()
-    
-#     return checkpointer, store
+    try:
+        print(f"🐘 Connecting to PostgreSQL: {connection_string.split('@')[1] if '@' in connection_string else 'localhost'}")
+        
+        # Create async checkpointer and store using context managers
+        async with AsyncPostgresSaver.from_conn_string(connection_string) as checkpointer, \
+                   AsyncPostgresStore.from_conn_string(connection_string) as store:
+            
+            if setup_db:
+                print("🔧 Setting up database tables...")
+                try:
+                    # Setup tables for both checkpointer and store
+                    await checkpointer.setup()
+                    await store.setup()
+                    print("✅ PostgreSQL tables created successfully")
+                except Exception as e:
+                    print(f"⚠️  Warning: Failed to setup database tables: {e}")
+                    print("   Tables may need to be created manually or database may not be accessible")
+            
+            print("🚀 AsyncPostgresSaver and AsyncPostgresStore initialized successfully")
+            yield checkpointer, store
+            
+    except ImportError as e:
+        print(f"❌ PostgreSQL dependencies not available: {e}")
+        print("📦 Install with: pip install langgraph-checkpoint-postgres langgraph-store-postgres psycopg[binary]")
+        raise
+    except Exception as e:
+        print(f"❌ Failed to connect to PostgreSQL: {e}")
+        raise
 
 
-# # Example connection strings for reference:
-# EXAMPLE_CONNECTION_STRINGS = {
-#     "local": "postgresql://user:password@localhost:5432/langgraph_db",
-#     "docker": "postgresql://postgres:password@localhost:5432/postgres", 
-#     "production": "postgresql://user:password@prod-host:5432/langgraph_prod"
-# } 
+async def test_postgres_connection() -> bool:
+    """Test PostgreSQL connection and return True if successful.
+    
+    Returns:
+        True if connection successful, False otherwise
+    """
+    try:
+        async with create_postgres_storage(setup_db=False) as (checkpointer, store):
+            # Try a simple operation to verify the connection
+            await store.alist_namespaces(limit=1)
+            print("✅ PostgreSQL connection test successful")
+            return True
+    except Exception as e:
+        print(f"❌ PostgreSQL connection test failed: {e}")
+        return False
+
+
+def is_postgres_configured() -> bool:
+    """Check if PostgreSQL environment variables are configured.
+    
+    Returns:
+        True if DATABASE_URL is set, False otherwise
+    """
+    return bool(os.getenv("DATABASE_URL"))

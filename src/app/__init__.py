@@ -1,1 +1,2 @@
-"""Fitbit Conversational AI FastAPI application package.""" 
+"""Fitbit Conversational AI FastAPI application package."""
+

@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage
 from ..agent.graph import graph_builder
 from ..agent.context import Context
 from ..agent.state import State
-from ..storage.memory import create_memory_storage
+from ..storage.postgres import create_postgres_storage
 from .routers import router, set_globals
 
 # Load environment variables from .env file
@@ -41,49 +41,47 @@ async def lifespan(app: FastAPI):
     # Startup logic
     print("🚀 Starting up Fitbit Conversational AI...")
     
-    # Create checkpointer and store
-    checkpointer, store = create_memory_storage()
-    
-    # Compile the graph with both checkpointer and store
-    graph_with_checkpointer = graph_builder.compile(
-        checkpointer=checkpointer,
-        store=store
-    )
-    
-    # Set globals in routers
-    set_globals(graph_with_checkpointer, store)
-    
-    # Test graph compilation
-    try:
-        test_state = State(messages=[HumanMessage(content="startup test")])
-        test_context = Context(user_id="startup", thread_id="startup")
+    # Use PostgreSQL storage
+    async with create_postgres_storage() as (checkpointer, store):
         
-        # Quick test to ensure graph is working with proper configurable keys
-        await graph_with_checkpointer.ainvoke(
-            test_state, 
-            context=test_context,
-            config={
-                "configurable": {
-                    "thread_id": "startup",
-                    "checkpoint_id": "startup_test"
-                },
-                "recursion_limit": 10  # Sufficient for simplified graph
-            }
+        # Compile the graph with both checkpointer and store
+        graph_with_checkpointer = graph_builder.compile(
+            checkpointer=checkpointer,
+            store=store
         )
         
-        print("✅ LangGraph agent initialized successfully")
+        # Set globals in routers
+        set_globals(graph_with_checkpointer, store)
         
-    except Exception as e:
-        print(f"❌ Failed to initialize LangGraph agent: {e}")
-        raise
-    
-    yield
-    
-    # Shutdown logic
-    print("🛑 Shutting down Fitbit Conversational AI...")
-    # Clean up resources if needed
-    if store:
-        print("🧹 Cleaning up memory store...")
+        # Test graph compilation
+        try:
+            test_state = State(messages=[HumanMessage(content="startup test")])
+            test_context = Context(user_id="startup", thread_id="startup")
+            
+            # Quick test to ensure graph is working with proper configurable keys
+            await graph_with_checkpointer.ainvoke(
+                test_state, 
+                context=test_context,
+                config={
+                    "configurable": {
+                        "thread_id": "startup",
+                        "checkpoint_id": "startup_test"
+                    },
+                    "recursion_limit": 10  # Sufficient for simplified graph
+                }
+            )
+            
+            print("✅ LangGraph agent initialized successfully")
+            
+        except Exception as e:
+            print(f"❌ Failed to initialize LangGraph agent: {e}")
+            raise
+        
+        yield
+        
+        # Shutdown logic
+        print("🛑 Shutting down Fitbit Conversational AI...")
+        print("🧹 PostgreSQL storage cleanup completed")
 
 
 def create_app() -> FastAPI:
